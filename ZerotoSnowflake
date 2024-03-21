@@ -1,0 +1,185 @@
+
+create or replace file format csv type='csv'
+  compression = 'auto' field_delimiter = ',' record_delimiter = '\n'
+  skip_header = 0 field_optionally_enclosed_by = '\042' trim_space = false
+  error_on_column_count_mismatch = false escape = 'none' escape_unenclosed_field = '\134'
+  date_format = 'auto' timestamp_format = 'auto' null_if = ('') comment = 'file format for ingesting data for zero to snowflake'
+
+  --verify file format is created
+
+show file formats in database citibike;
+
+copy into trips from @citibike_trips file_format=csv PATTERN = '.*csv.*' ;
+
+truncate table trips;
+
+--verify table is clear
+select * from trips limit 10;
+
+//check the contents
+USE DATABASE CITIBIKE
+list @citibike_trips;
+
+// LOAD DATA
+copy into trips from @citibike_trips
+file_format=CSV;
+
+
+// Check the data
+Select * from trips limit 20;
+
+// Get some Sample Statistics
+select date_trunc('hour', starttime) as "date",
+count(*) as "num trips",
+avg(tripduration)/60 as "avg duration (mins)",
+avg(haversine(start_station_latitude, start_station_longitude, end_station_latitude, end_station_longitude)) as "avg distance (km)"
+from trips
+group by 1 order by 1;
+
+// which month was the busiest
+select
+monthname(starttime) as "month",
+count(*) as "num trips"
+from trips
+group by 1 order by 2 desc;
+
+// create a clone
+create table trips_dev clone trips;
+
+//create a new database
+create database weather;
+
+use role accountadmin;
+use warehouse COMPUTE_WH;
+use database weather;
+use schema public;
+
+// create new table
+create table json_weather_data (v variant);
+
+//create a new stage
+create stage nyc_weather
+url = 's3://snowflake-workshop-lab/weather-nyc';
+
+list @nyc_weather;
+
+copy into json_weather_data
+from @nyc_weather 
+    file_format = (type = json strip_outer_array = true);
+
+select * from json_weather_data limit 10;
+
+create or replace view json_weather_data_view as
+select
+    to_timestamp(v:time::number) as observation_time,
+    v:city.id::string as station_id,
+    v:city.name::string as city_name,
+    v:city.country::string as country,
+    v:city.coord.lat::float as city_lat,
+    v:city.coord.lon::float as city_lon,
+    -- Simplifying weather_conditions extraction to avoid subqueries and FLATTEN for this example
+    v:weather[0]:description::string as weather_conditions,
+    v:weather[0]:id::int as weather_conditions_code,
+    v:main.temp::float as temp,
+    /*v:rain:3h::float as rain, */
+    v:wind.deg::float as wind_dir,
+    v:wind.speed::float as wind_speed,
+    v:main.humidity::float as relative_humidity,
+    v:main.pressure::float as pressure
+from
+    json_weather_data;
+/*Hi I believe the 's3://snowflake-workshop-lab/weather-nyc' at 33:00 JSON file has been updated when looking at the JSON file and comparing it to what its present in the video it is now more nested. I had to replace the create or replace view json_weather_data_view as select statement with */
+
+
+select * from json_weather_data_view
+where date_trunc('month',observation_time) = '2018-01-01'
+limit 20;
+
+
+select weather_conditions as conditions
+,count(*) as num_trips
+from citibike.public.trips
+left outer join json_weather_data_view
+on date_trunc('hour', observation_time) = date_trunc('hour', starttime)
+where conditions is not null
+group by 1 order by 2 desc;
+
+drop table json_weather_data;
+
+select * from json_weather_data limit 10;
+
+undrop table json_weather_data;
+
+--verify table is undropped
+
+select * from json_weather_data limit 10;
+
+use role AccountAdmin;
+
+use warehouse compute_wh;
+
+use database CITIBIKE;
+
+use schema public;
+
+update trips set start_station_name = 'oops';
+
+select
+start_station_name as "station",
+count(*) as "rides"
+from trips
+group by 1
+order by 2 desc
+limit 20;
+
+set query_id =
+(select query_id from table(information_schema.query_history_by_session (result_limit=>5))
+where query_text like 'update%' order by start_time desc limit 1);
+
+create or replace table trips as
+(select * from trips before (statement => $query_id));
+
+select
+start_station_name as "station",
+count(*) as "rides"
+from trips
+group by 1
+order by 2 desc
+limit 20;
+
+use role accountadmin;
+
+create role junior_dba;
+
+grant role junior_dba to user Sumosam1;
+
+use role junior_dba;
+
+use role accountadmin;
+
+grant usage on warehouse compute_wh to role junior_dba;
+
+use role junior_dba;
+
+use warehouse compute_wh;
+
+use role accountadmin;
+
+grant usage on database citibike to role junior_dba;
+
+grant usage on database weather to role junior_dba;
+
+use role junior_dba;
+
+use role accountadmin;
+
+drop share if exists zero_to_snowflake_shared_data;
+-- If necessary, replace "zero_to_snowflake-shared_data" with the name you used for the share
+
+drop database if exists citibike;
+
+drop database if exists weather;
+
+drop warehouse if exists analytics_wh;
+
+drop role if exists junior_dba;

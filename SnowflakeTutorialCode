@@ -1,0 +1,73 @@
+/* Creating the storage integration object in other to have access to 
+credentials and connect to  AWS S3.*/
+
+// Create storage integration object
+create or replace storage integration s3_integration
+  TYPE = EXTERNAL_STAGE
+  STORAGE_PROVIDER = S3
+  ENABLED = TRUE 
+  STORAGE_AWS_ROLE_ARN ='arn:aws:iam::870767523452:role/Snowflakespnsor_access_role'
+  STORAGE_ALLOWED_LOCATIONS = ('s3://sumodwmusilisnowflake/2024-03-25_-_Worker_and_Temporary_Worker.csv')
+  COMMENT = 'Please note that access was only given to the CSV files' 
+
+/* Using the DESC INTEGRATION command to retrieve the STORAGE_AWS_IAM_USER_ARN
+and STORAGE_AWS_EXTERNAL_ID so we can update it in S3*/
+
+DESC integration s3_integration;
+
+-- First, we create a table for the data to be loaded
+// Create table first
+CREATE OR REPLACE TABLE SPONSER_LIST_DB.PUBLIC.sponsor_list(
+  organisation_name STRING,
+  town_city STRING,
+  county STRING,
+  type_rating STRING,
+  route STRING)
+
+-- Create file format object
+CREATE OR REPLACE file format MANAGE_DB.file_formats.csv_fileformat
+    type = csv
+    field_delimiter = ','
+    skip_header = 1
+    null_if = ('NULL','null')
+    empty_field_as_null = TRUE
+    FIELD_OPTIONALLY_ENCLOSED_BY = '"' ;
+
+/* FIELD_OPTIONALLY_ENCLOSED_BY = '"' was used to handle the error 
+"Field delimiter ',' found while expecting record delimiter '\n'"
+ while loading CSV data*/
+
+  --------------------------------------------------------------------- 
+ 
+/* Create a stage(csv_folder) object that references the storage 
+integration object and the file format object*/  
+CREATE OR REPLACE stage MANAGE_DB.external_stages.csv_folder
+    URL = 's3://sumodwmusilisnowflake/2024-03-25_-_Worker_and_Temporary_Worker.csv'
+    STORAGE_INTEGRATION = s3_integration
+    FILE_FORMAT = MANAGE_DB.file_formats.csv_fileformat
+    COMMENT = 'I only gave access to the CSV file in the S3 Buckets.'
+
+-- Load data from staged files into the target table with the Copy command.      
+COPY INTO SPONSER_LIST_DB.PUBLIC.sponsor_list
+FROM @MANAGE_DB.external_stages.csv_folder
+
+
+-- View the Data.      
+
+SELECT * FROM SPONSER_LIST_DB.PUBLIC.sponsor_list
+
+-- Creating our Pipe Schema for storing all pipes
+CREATE OR REPLACE SCHEMA MANAGE_DB.pipes
+
+-- Define pipe
+CREATE OR REPLACE pipe MANAGE_DB.pipes.sponsor_pipe
+auto_ingest = TRUE
+AS
+COPY INTO SPONSER_LIST_DB.PUBLIC.sponsor_list
+FROM @MANAGE_DB.external_stages.csv_folder 
+
+/*Describe the pipe to see the code to connect the trigger Snowpipe and 
+create event notification in S3 Bucket*/
+DESC pipe sponsor_pipe    
+
+  
